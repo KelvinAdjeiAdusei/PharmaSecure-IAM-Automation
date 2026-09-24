@@ -15,6 +15,7 @@ $GraphContext = Get-MgContext
 if (-not $GraphContext) {
     Write-Error "Microsoft Graph authentication required. Connect to Microsoft Graph before running this automation."
     exit 1
+}
 
 # Import JML register
 $JMLRegister = Import-Csv $JMLFile
