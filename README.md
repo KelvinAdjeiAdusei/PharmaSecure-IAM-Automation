@@ -2,7 +2,7 @@
 
 A hands-on Identity and Access Management (IAM) automation project built with **Microsoft Entra ID, Microsoft Graph, and PowerShell**.
 
-PharmaSecure is a fictional pharmaceutical organization used to simulate enterprise IAM operations in a regulated environment. The project demonstrates role-based access control (RBAC), Joiner-Mover lifecycle automation, temporary access governance, automated access revocation, post-change verification, certificate-based Microsoft Graph authentication, and audit evidence generation.
+PharmaSecure is a fictional pharmaceutical organization used to simulate enterprise IAM operations in a regulated environment. The project demonstrates role-based access control (RBAC), Joiner-Mover lifecycle automation, temporary access governance, automated access revocation, post-change verification, certificate-based Microsoft Graph authentication, fail-safe API handling, and audit evidence generation.
 
 ---
 
@@ -20,7 +20,7 @@ Processes pending Joiner requests and assigns role-based access according to an 
 
 ### 2. Mover Automation
 
-Processes role changes and transitions users from obsolete RBAC groups to the appropriate access for their new role.
+Processes employee role changes, removes obsolete managed job-role access, preserves unrelated access, and provisions the RBAC membership required for the employee's new role.
 
 ### 3. Temporary Access Governance
 
@@ -79,17 +79,17 @@ PowerShell processes those records and communicates with Microsoft Entra ID thro
 | Users + Security Groups   |
 +-------------+-------------+
               |
-       +------+------+
-       |             |
-       v             v
- Access Change   Verification
-       |             |
-       +------+------+
+        +-----+-----+
+        |           |
+        v           v
+  Access Change  Verification
+        |           |
+        +-----+-----+
               |
               v
 +---------------------------+
-|     Audit Evidence        |
-|          (CSV)            |
+|      Audit Evidence       |
+|           (CSV)           |
 +---------------------------+
 ```
 
@@ -133,6 +133,8 @@ For each request, the automation:
 8. Queries Entra ID again to verify the resulting state.
 9. Generates structured audit evidence.
 
+The evaluation date defaults to the current system date. An optional `-EvaluationDate` parameter can be supplied for controlled testing and reproducible lab demonstrations.
+
 This implements the control pattern:
 
 ```text
@@ -159,7 +161,7 @@ The test identity is shown as a member of the temporary QMS RBAC group before en
 
 ## Expired Access Detection
 
-The access register is evaluated against the configured evaluation date to identify temporary access that has exceeded its approved expiration period.
+The access register is evaluated against the current system date by default. An optional evaluation date can be supplied for controlled testing and reproducible lab demonstrations.
 
 ![Expired Access Detection](screenshots/03-expired-access-detection.png)
 
@@ -210,6 +212,8 @@ IAM-RBAC-Lab-Analysts
 
 The workflow is designed to handle an already-provisioned identity. If the required membership is already present, the automation records the existing state rather than attempting to create duplicate access.
 
+Graph lookup, provisioning, and verification failures are recorded separately from legitimate IAM states so that a technical failure cannot be interpreted as a valid access decision.
+
 ## Joiner Automation
 
 The Joiner workflow evaluates the employee's department and job title and maps the identity to the appropriate Entra ID RBAC group.
@@ -228,7 +232,7 @@ After processing, the resulting group membership is checked to validate the user
 
 `PharmaSecure_Mover_Automation.ps1` processes pending Mover events from the JML register.
 
-When an employee changes roles, access associated with the previous role should be removed and access appropriate to the new role should be provisioned.
+When an employee changes roles, obsolete job-role access should be removed and access appropriate to the new role should be provisioned without unintentionally removing unrelated or special-purpose access.
 
 Example:
 
@@ -236,31 +240,35 @@ Example:
               Alex Thompson
                     |
                     v
-        Laboratory / Lab Analyst
+         Laboratory / Lab Analyst
                     |
                     v
-        IAM-RBAC-Lab-Analysts
+         IAM-RBAC-Lab-Analysts
                     |
                MOVER EVENT
                     |
                     v
-         Quality / QA Specialist
+          Quality / QA Specialist
                     |
                     v
-              IAM-RBAC-QA
+               IAM-RBAC-QA
 ```
 
 The Mover automation:
 
 1. Reads pending Mover requests.
-2. Determines the target RBAC group.
-3. Locates the user in Microsoft Entra ID.
-4. Queries existing IAM RBAC memberships.
-5. Identifies obsolete role-based access.
-6. Removes the previous RBAC membership.
-7. Adds the target RBAC membership.
-8. Queries Entra ID again to evaluate the resulting state.
-9. Records the lifecycle operation in audit evidence.
+2. Maps the employee's new department and job title to an approved RBAC group.
+3. Locates the identity in Microsoft Entra ID.
+4. Retrieves the user's current IAM RBAC memberships.
+5. Identifies obsolete memberships only within the defined job-role RBAC scope.
+6. Preserves unrelated and special-purpose access.
+7. Removes obsolete managed job-role memberships.
+8. Checks whether the target RBAC membership already exists.
+9. Provisions the target RBAC membership when necessary.
+10. Queries Entra ID again to verify the final authorization state.
+11. Records the lifecycle operation in structured audit evidence.
+
+The workflow is designed to be idempotent and scoped to explicitly managed job-role groups. Special-purpose access, such as temporary QMS access, is intentionally excluded from Mover revocation logic.
 
 ## RBAC Role Mapping
 
@@ -270,7 +278,7 @@ The automation uses a department and job-title mapping table to determine the ap
 
 ## Mover Automation
 
-The Mover workflow processes the transition between the user's previous RBAC assignment and the group associated with the new role.
+The Mover workflow transitions the user's managed job-role access to the group associated with the new role while preserving access outside the workflow's defined scope.
 
 ![Mover Automation](screenshots/07-mover-automation.png)
 
@@ -305,6 +313,8 @@ These operations allow the scripts to:
 - Provision access
 - Revoke access
 - Query resulting access states
+
+Graph-dependent operations use structured error handling so that API, authentication, permission, or connectivity failures are treated as technical failures rather than valid IAM states.
 
 ---
 
@@ -396,6 +406,8 @@ Department and job-title combinations are mapped to defined Microsoft Entra secu
 
 Access is associated with the user's business role rather than being assigned without role context.
 
+Mover processing removes obsolete managed job-role access while preserving access outside the workflow's defined scope.
+
 ## Identity Lifecycle Management
 
 Joiner and Mover events drive role-based access decisions.
@@ -419,6 +431,86 @@ Automation results are exported to structured evidence files.
 ## Credential Security
 
 Certificate-based application authentication avoids embedding passwords or client secrets in the PowerShell source code.
+
+---
+
+# Security & Design Decisions
+
+The automation was designed to demonstrate IAM engineering principles beyond basic user and group administration.
+
+## Fail-Safe Microsoft Graph Operations
+
+Microsoft Graph operations use terminating error handling and structured `try/catch` blocks.
+
+API failures, permission issues, authentication problems, or connectivity errors are treated as technical failures rather than legitimate IAM states.
+
+This prevents a failed Graph query from being incorrectly interpreted as evidence that a user does not have access.
+
+## Idempotent Access Management
+
+The Joiner and Mover workflows check existing group membership before assigning access.
+
+If the required RBAC membership already exists, the automation records the existing state rather than attempting a duplicate assignment.
+
+This allows workflows to be safely rerun while reducing unnecessary directory changes.
+
+## Scoped RBAC Management
+
+The Mover workflow manages only explicitly defined job-role RBAC groups:
+
+- `IAM-RBAC-Lab-Analysts`
+- `IAM-RBAC-QA`
+- `IAM-RBAC-RD-Scientists`
+- `IAM-RBAC-Manufacturing`
+- `IAM-RBAC-HR`
+- `IAM-RBAC-IT-Admins`
+
+Special-purpose access such as `IAM-RBAC-QMS-Temporary` is outside the Mover workflow's managed job-role scope.
+
+This prevents a role change from unintentionally removing unrelated or temporary access.
+
+## Least-Privilege Mover Workflow
+
+When an employee changes roles, the automation:
+
+1. Determines the target RBAC group from the approved department/job-title mapping.
+2. Identifies obsolete managed job-role memberships.
+3. Removes obsolete job-role access.
+4. Adds the required target role if it is not already present.
+5. Queries Entra ID again to verify the final authorization state.
+6. Records the result in audit evidence.
+
+This demonstrates automated enforcement of role-based access and least-privilege principles during identity lifecycle changes.
+
+## Post-Change Verification
+
+Successful API execution alone is not considered sufficient evidence of a successful IAM change.
+
+After provisioning or revocation, the automation queries Microsoft Entra ID again and validates the resulting membership state before recording the operation as successful.
+
+## Dynamic Temporary Access Evaluation
+
+Temporary-access governance uses the current system date by default rather than relying on a permanently hardcoded evaluation date.
+
+A custom evaluation date can also be supplied for testing or reproducible lab demonstrations:
+
+```powershell
+.\automation\PharmaSecure-IAM-Automation.ps1 -EvaluationDate "2026-10-02"
+```
+
+This allows the same automation to support both normal execution and controlled testing scenarios.
+
+## Audit Evidence
+
+Each workflow generates structured CSV audit evidence containing relevant identity, role, lifecycle, action, result, and verification information.
+
+The goal is to demonstrate traceability suitable for access reviews, troubleshooting, and audit-support scenarios.
+
+## Certificate-Based Authentication
+
+Microsoft Graph access is performed through an Entra ID application using certificate-based authentication rather than embedding credentials or client secrets in the scripts.
+
+Sensitive authentication material such as private keys, certificates, tenant-specific configuration, and secrets is excluded from the repository.
 
 ---
 
@@ -524,6 +616,14 @@ From the repository root:
 .\automation\PharmaSecure-IAM-Automation.ps1
 ```
 
+By default, the current system date is used to evaluate expiration.
+
+For a controlled test using a specific evaluation date:
+
+```powershell
+.\automation\PharmaSecure-IAM-Automation.ps1 -EvaluationDate "2026-10-02"
+```
+
 ---
 
 ## Run Joiner Automation
@@ -558,12 +658,15 @@ This project demonstrates hands-on experience with:
 - Identity lifecycle management
 - Temporary access governance
 - Automated access revocation
+- Least-privilege access management
+- Idempotent IAM automation
+- Fail-safe API error handling
 - Post-change access validation
 - Certificate-based authentication
 - Audit evidence generation
 - Security controls in a simulated regulated environment
 
-The project was designed to move beyond manual IAM administration and demonstrate how identity processes can be implemented as repeatable and auditable automation workflows.
+The project was designed to move beyond manual IAM administration and demonstrate how identity processes can be implemented as repeatable, verifiable, and auditable automation workflows.
 
 ---
 
