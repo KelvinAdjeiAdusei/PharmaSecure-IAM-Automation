@@ -31,7 +31,12 @@ catch {
     exit 1
 }
 
-# Role-to-group mapping
+# ==========================================
+# RBAC Configuration
+# ==========================================
+
+# Maps approved department/job-title combinations
+# to their corresponding Entra ID RBAC groups
 $RBACMapping = @{
     "Laboratory|Lab Analyst"               = "IAM-RBAC-Lab-Analysts"
     "Quality|QA Specialist"                = "IAM-RBAC-QA"
@@ -40,6 +45,18 @@ $RBACMapping = @{
     "HR|HR Specialist"                     = "IAM-RBAC-HR"
     "IT|Systems Administrator"             = "IAM-RBAC-IT-Admins"
 }
+
+# Job-role groups controlled by this JML workflow.
+# Other IAM-RBAC groups, such as temporary access groups,
+# are outside the scope of the Mover automation.
+$ManagedRBACGroups = @(
+    "IAM-RBAC-Lab-Analysts"
+    "IAM-RBAC-QA"
+    "IAM-RBAC-RD-Scientists"
+    "IAM-RBAC-Manufacturing"
+    "IAM-RBAC-HR"
+    "IAM-RBAC-IT-Admins"
+)
 
 $AuditResults = @()
 
@@ -59,9 +76,10 @@ foreach ($Request in $JMLRegister) {
         $Verification = $null
         $TargetGroupName = $null
         $OldGroupName = "Unknown"
-        $OldGroupId = $null
+        $OldGroups = @()
         $User = $null
         $TargetGroup = $null
+        $CurrentRBACGroups = @()
 
         Write-Host "Employee ID: $($Request.'Employee ID')"
         Write-Host "User: $($Request.User)"
@@ -69,7 +87,10 @@ foreach ($Request in $JMLRegister) {
         Write-Host "New Job Title: $($Request.'Job Title')"
         Write-Host ""
 
+        # ==========================================
         # Determine target RBAC group
+        # ==========================================
+
         $MappingKey = "$($Request.Department)|$($Request.'Job Title')"
         $TargetGroupName = $RBACMapping[$MappingKey]
 
@@ -85,11 +106,13 @@ foreach ($Request in $JMLRegister) {
         }
         else {
 
-            # ------------------------------------------
-            # Graph discovery
-            # ------------------------------------------
+            # ==========================================
+            # Microsoft Graph discovery
+            # ==========================================
 
             try {
+
+                # Find user
                 $User = Get-MgUser `
                     -Filter "displayName eq '$($Request.User)'"
 
@@ -97,31 +120,38 @@ foreach ($Request in $JMLRegister) {
                     throw "User '$($Request.User)' was not found in Microsoft Entra ID."
                 }
 
-                # Get current RBAC memberships
+                # Get user's current group memberships
                 $CurrentGroups = Get-MgUserMemberOf `
                     -UserId $User.Id `
                     -All
 
+                # Limit analysis to IAM RBAC groups
                 $CurrentRBACGroups = $CurrentGroups |
                     Where-Object {
                         $_.AdditionalProperties.displayName -like "IAM-RBAC-*"
                     }
 
-                # Determine existing RBAC group that differs
-                # from the requested target group
-                $OldGroup = $CurrentRBACGroups |
-                    Where-Object {
-                        $_.AdditionalProperties.displayName -ne $TargetGroupName
-                    } |
-                    Select-Object -First 1
+                # Identify obsolete managed job-role groups.
+                # Temporary/special-purpose RBAC groups are intentionally ignored.
+                $OldGroups = @(
+                    $CurrentRBACGroups |
+                        Where-Object {
+                            $_.AdditionalProperties.displayName -in $ManagedRBACGroups -and
+                            $_.AdditionalProperties.displayName -ne $TargetGroupName
+                        }
+                )
 
-                if ($OldGroup) {
-                    $OldGroupName = $OldGroup.AdditionalProperties.displayName
-                    $OldGroupId = $OldGroup.Id
+                if ($OldGroups.Count -gt 0) {
+
+                    $OldGroupName = (
+                        $OldGroups |
+                            ForEach-Object {
+                                $_.AdditionalProperties.displayName
+                            }
+                    ) -join "; "
                 }
                 else {
                     $OldGroupName = "None"
-                    $OldGroupId = $null
                 }
 
                 # Find target RBAC group
@@ -145,47 +175,61 @@ foreach ($Request in $JMLRegister) {
             # Continue only if discovery succeeded
             if (-not $Result) {
 
-                Write-Host "Current RBAC Group: $OldGroupName"
+                Write-Host "Current Managed RBAC Group(s): $OldGroupName"
                 Write-Host "Target RBAC Group: $TargetGroupName"
                 Write-Host ""
 
-                # ------------------------------------------
-                # Remove obsolete RBAC membership
-                # ------------------------------------------
+                # ==========================================
+                # Determine whether target already exists
+                # ==========================================
 
-                if ($OldGroupId) {
+                $ExistingTargetAccess = $CurrentRBACGroups |
+                    Where-Object {
+                        $_.AdditionalProperties.displayName -eq $TargetGroupName
+                    }
 
-                    Write-Host "Action: Removing old RBAC membership"
+                # ==========================================
+                # Remove obsolete RBAC memberships
+                # ==========================================
+
+                if ($OldGroups.Count -gt 0) {
+
+                    Write-Host "Action: Removing obsolete job-role RBAC membership(s)"
 
                     try {
-                        Remove-MgGroupMemberByRef `
-                            -GroupId $OldGroupId `
-                            -DirectoryObjectId $User.Id
 
-                        Write-Host "Old RBAC membership removed"
+                        foreach ($OldGroup in $OldGroups) {
+
+                            $GroupName = $OldGroup.AdditionalProperties.displayName
+
+                            Write-Host "Removing: $GroupName"
+
+                            Remove-MgGroupMemberByRef `
+                                -GroupId $OldGroup.Id `
+                                -DirectoryObjectId $User.Id
+
+                            Write-Host "Removed: $GroupName"
+                        }
                     }
                     catch {
 
                         Write-Host "Result: MOVER FAILED"
-                        Write-Host "Details: Failed to remove old RBAC membership."
+                        Write-Host "Details: Failed to remove obsolete RBAC membership."
                         Write-Host "Graph Error: $($_.Exception.Message)"
 
                         $Result = "Mover Failed - Old RBAC Removal"
                         $Verification = "Graph Removal Operation Failed"
                     }
                 }
+                else {
+                    Write-Host "Obsolete Managed RBAC Access: NOT PRESENT"
+                }
 
-                # ------------------------------------------
+                # ==========================================
                 # Add target RBAC membership
-                # ------------------------------------------
+                # ==========================================
 
                 if (-not $Result) {
-
-                    # Check whether target membership already exists
-                    $ExistingTargetAccess = $CurrentRBACGroups |
-                        Where-Object {
-                            $_.AdditionalProperties.displayName -eq $TargetGroupName
-                        }
 
                     if ($ExistingTargetAccess) {
 
@@ -194,9 +238,10 @@ foreach ($Request in $JMLRegister) {
                     }
                     else {
 
-                        Write-Host "Action: Adding new RBAC membership"
+                        Write-Host "Action: Adding target RBAC membership"
 
                         try {
+
                             New-MgGroupMemberByRef `
                                 -GroupId $TargetGroup.Id `
                                 -OdataId "https://graph.microsoft.com/v1.0/directoryObjects/$($User.Id)"
@@ -215,30 +260,30 @@ foreach ($Request in $JMLRegister) {
                     }
                 }
 
-                # ------------------------------------------
-                # Verify final access state
-                # ------------------------------------------
+                # ==========================================
+                # Verify final RBAC state
+                # ==========================================
 
                 if (-not $Result) {
 
                     try {
+
                         $GroupsAfter = Get-MgUserMemberOf `
                             -UserId $User.Id `
                             -All
 
+                        # Verify target role is present
                         $NewAccess = $GroupsAfter |
                             Where-Object {
                                 $_.AdditionalProperties.displayName -eq $TargetGroupName
                             }
 
-                        $OldAccess = $null
-
-                        if ($OldGroupId) {
-                            $OldAccess = $GroupsAfter |
-                                Where-Object {
-                                    $_.Id -eq $OldGroupId
-                                }
-                        }
+                        # Verify no obsolete managed job-role groups remain
+                        $OldAccess = $GroupsAfter |
+                            Where-Object {
+                                $_.AdditionalProperties.displayName -in $ManagedRBACGroups -and
+                                $_.AdditionalProperties.displayName -ne $TargetGroupName
+                            }
 
                         if ($NewAccess -and -not $OldAccess) {
 
@@ -247,7 +292,7 @@ foreach ($Request in $JMLRegister) {
                             Write-Host "Verification: SUCCESS"
 
                             $Result = "Mover Successful"
-                            $Verification = "Verified - Old RBAC Removed / New RBAC Present"
+                            $Verification = "Verified - Obsolete RBAC Removed / Target RBAC Present"
                         }
                         else {
 
@@ -256,7 +301,7 @@ foreach ($Request in $JMLRegister) {
                             Write-Host "Verification: FAILED"
 
                             $Result = "Mover Verification Failed"
-                            $Verification = "Old or New RBAC State Incorrect"
+                            $Verification = "Managed RBAC State Incorrect"
                         }
                     }
                     catch {
@@ -274,7 +319,10 @@ foreach ($Request in $JMLRegister) {
 
         Write-Host "--------------------------------------"
 
-        # Generate audit record
+        # ==========================================
+        # Generate audit evidence
+        # ==========================================
+
         $AuditResults += [PSCustomObject]@{
             "Employee ID"     = $Request."Employee ID"
             "User"            = $Request.User
@@ -291,11 +339,17 @@ foreach ($Request in $JMLRegister) {
     }
 }
 
+# ==========================================
 # Export audit evidence
+# ==========================================
+
 try {
-    $AuditResults | Export-Csv $MoverAuditFile -NoTypeInformation
+
+    $AuditResults |
+        Export-Csv $MoverAuditFile -NoTypeInformation
 }
 catch {
+
     Write-Error "Unable to export Mover audit evidence: $($_.Exception.Message)"
     exit 1
 }
