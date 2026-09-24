@@ -1,0 +1,3 @@
+"Request ID","User","Application","Access Type","Expiration Date","Evaluation Date","Status","Action","Result","Verification"
+"IAM-REQ-001","Sarah Johnson","PharmaSecure-QMS","Standard","10/01/2026","10/02/2026","Expired","No Action Required","Access Already Revoked","Verified - User Not In Temporary Group"
+"IAM-REQ-002","IAM Test User","PharmaSecure-QMS","Standard","10/01/2026","10/02/2026","Expired","No Action Required","Access Already Revoked","Verified - User Not In Temporary Group"

@@ -1,0 +1,2 @@
+"Employee ID","User","Department","Job Title","Lifecycle Event","RBAC Group","Action Date","Result","Verification"
+"EMP-001","Alex Thompson","Laboratory","Lab Analyst","Joiner","IAM-RBAC-Lab-Analysts","09/04/2026","Already Provisioned","Verified - User Already In RBAC Group"

@@ -1,0 +1,20 @@
+# PowerShell / Windows
+*.log
+*.tmp
+*.bak
+
+# Secrets / certificates
+*.pfx
+*.p12
+*.key
+*.pem
+.env
+.env.*
+
+# Local configuration
+local/
+secrets/
+
+# Windows
+Thumbs.db
+Desktop.ini

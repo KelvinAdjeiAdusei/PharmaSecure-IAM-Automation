@@ -1,0 +1,2 @@
+"Employee ID","User","Old RBAC Group","New Department","New Job Title","New RBAC Group","Lifecycle Event","Effective Date","Action Date","Result","Verification"
+"EMP-001","Alex Thompson","IAM-RBAC-Lab-Analysts","Quality","QA Specialist","IAM-RBAC-QA","Mover","09/05/2026","09/04/2026","Mover Successful","Verified - Old RBAC Removed / New RBAC Present"

@@ -1,0 +1,3 @@
+Request ID,User,Department,Application,Access,Business Justification,Approver,Start Date,End Date,Status
+IAM-REQ-001,Sarah Johnson,R & D,PharmaSecure-QMS,Standard,QA collaboration for research quality investigation,Michael Chen,09/01/2026,10/01/2026,Approved/Implemented
+ IAM-REQ-002,IAM Test User,R & D,PharmaSecure-QMS,Standard,IAM automation revocation test,Michael Chen,09/01/2026,10/01/2026,Approved/Implemented
