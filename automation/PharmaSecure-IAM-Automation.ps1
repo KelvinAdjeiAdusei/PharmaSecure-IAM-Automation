@@ -3,6 +3,9 @@
 # Purpose: Detect and revoke expired temporary access
 
 # Determine project root from script location
+
+$ErrorActionPreference = "Stop"
+
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
 
 # Portable project paths
@@ -33,13 +36,34 @@ Write-Host ""
 foreach ($Request in $AccessRegister) {
 
     $Expiration = Get-Date $Request."End Date"
-
+try {
     $User = Get-MgUser -Filter "displayName eq '$($Request.User)'"
+
+    if (-not $User) {
+        throw "User '$($Request.User)' was not found in Microsoft Entra ID."
+    }
+
     $Group = Get-MgGroup -Filter "displayName eq 'IAM-RBAC-QMS-Temporary'"
 
-    $Members = Get-MgGroupMember -GroupId $Group.Id
-    $Access = $Members | Where-Object { $_.Id -eq $User.Id }
+    if (-not $Group) {
+        throw "Required group 'IAM-RBAC-QMS-Temporary' was not found."
+    }
 
+    $Members = Get-MgGroupMember -GroupId $Group.Id -All
+
+    $Access = $Members |
+        Where-Object { $_.Id -eq $User.Id }
+}
+catch {
+    Write-Host ""
+    Write-Host "ERROR: Microsoft Graph operation failed."
+    Write-Host "User: $($Request.User)"
+    Write-Host "Details: $($_.Exception.Message)"
+    Write-Host "Action: Record skipped to prevent an incorrect IAM decision."
+    Write-Host "--------------------------------------"
+
+    continue
+}
     Write-Host "Request ID: $($Request."Request ID")"
     Write-Host "User: $($Request.User)"
     Write-Host "Application: $($Request.Application)"
@@ -54,21 +78,38 @@ foreach ($Request in $AccessRegister) {
             Write-Host "Entra Access: PRESENT"
             Write-Host "Action: REVOKING TEMPORARY ACCESS"
 
-            Remove-MgGroupMemberByRef `
-                -GroupId $Group.Id `
-                -DirectoryObjectId $User.Id
+           try {
+    Remove-MgGroupMemberByRef `
+        -GroupId $Group.Id `
+        -DirectoryObjectId $User.Id
 
-            $MembersAfter = Get-MgGroupMember -GroupId $Group.Id
-            $AccessAfter = $MembersAfter | Where-Object { $_.Id -eq $User.Id }
+    $MembersAfter = Get-MgGroupMember `
+        -GroupId $Group.Id `
+        -All
 
-            if ($AccessAfter) {
-                $Result = "Revocation Failed"
-                $Verification = "User Still In Temporary Group"
-            }
-            else {
-                $Result = "Revocation Successful"
-                $Verification = "Verified - User Removed From Temporary Group"
-            }
+    $AccessAfter = $MembersAfter |
+        Where-Object { $_.Id -eq $User.Id }
+}
+catch {
+    Write-Host "Result: REVOCATION FAILED"
+    Write-Host "Details: $($_.Exception.Message)"
+
+    $Result = "Revocation Failed"
+    $Verification = "Graph Operation Failed"
+
+    $AccessAfter = $true
+}
+           if ($Verification -eq "Graph Operation Failed") {
+    # Preserve the Graph failure result
+}
+elseif ($AccessAfter) {
+    $Result = "Revocation Failed"
+    $Verification = "User Still In Temporary Group"
+}
+else {
+    $Result = "Revocation Successful"
+    $Verification = "Verified - User Removed From Temporary Group"
+}
         }
         else {
 
