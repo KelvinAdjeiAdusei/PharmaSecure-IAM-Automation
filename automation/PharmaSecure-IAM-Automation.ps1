@@ -4,6 +4,10 @@
 
 # Determine project root from script location
 
+param(
+    [datetime]$EvaluationDate = (Get-Date)
+)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
@@ -22,7 +26,7 @@ if (-not $GraphContext) {
 # Import access register
 $AccessRegister = Import-Csv $AccessRegisterPath
 
-$Today = Get-Date "2026-10-02"
+$Today = $EvaluationDate
 
 $AuditResults = @()
 
